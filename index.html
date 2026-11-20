@@ -28,6 +28,7 @@ button.small{padding:6px 10px;font-size:14px}
 button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
 .set{display:grid;grid-template-columns:28px 1fr 1fr 40px;gap:6px;align-items:center;margin-top:6px}
 .set input[type=checkbox]{width:26px;height:26px;accent-color:var(--ok)}
+.ok{display:flex;gap:10px;align-items:center;margin-top:10px;font-weight:600}.ok input{width:26px;height:26px;accent-color:var(--ok)}
 .blk{display:inline-block;font-size:13px;padding:1px 8px;border-radius:99px;background:var(--bg);border:1px solid var(--line);margin-left:6px;font-weight:600}
 .done{color:var(--ok);font-weight:700}
 nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -78,7 +79,11 @@ function pickDefault(){
   if(ws.length)sel={w:ws[0],d:[...days()[ws[0]]].sort((a,b)=>a-b)[0]};
 }
 const isWod=b=>/wod|metcon|amrap|emom/i.test(b);
-function last(ex){for(let i=S.logs.length-1;i>=0;i--){const e=S.logs[i].entries.find(e=>e.ex===ex);if(e)return e}return null}
+const resOf=e=>e.res||(e.sets&&e.sets[0]&&e.sets[0].res)||'';
+function last(ex){for(let i=S.logs.length-1;i>=0;i--){const e=S.logs[i].entries.find(e=>e.ex===ex&&resOf(e));if(e)return e}return null}
+const tgtOf=r=>(r.reps||r.kg)?`${r.sets} × ${r.reps||'?'}${r.kg?' @ '+r.kg+' kg':''}`:(r.sets>1?r.sets+' Runden/Sätze':'');
+const fmt=e=>e.sets?e.sets.map(s=>s.res!==undefined?s.res:(s.kg||'–')+' kg × '+(s.reps||'–')).join(' · '):(e.res!==undefined?(e.res||'–'):(e.done?'✓ erledigt':'übersprungen'));
+const summary=()=>S.logs.slice(-12).map(l=>`${l.date} · Woche ${l.w}, Tag ${l.d}${l.rating?' · Bewertung: '+l.rating:''}${l.note?' · '+l.note:''}\n`+l.entries.map(e=>`- ${e.ex}${e.t?' ('+e.t+')':''}: ${fmt(e)}`).join('\n')).join('\n\n');
 
 function viewTrain(){
   if(!S.plan.length)return `<h1>Training</h1><div class="card"><p>Noch kein Plan vorhanden.</p><p class="mute">Importiere unter „Plan“ eine CSV-Datei oder lade die Vorlage.</p><button data-go="plan">Zum Plan-Import</button></div>`;
@@ -89,45 +94,40 @@ function viewTrain(){
   let h=`<h1>Training</h1><div class="row card"><select id="selW" aria-label="Woche">${ws.map(w=>`<option value="${w}"${w==sel.w?' selected':''}>Woche ${w}</option>`).join('')}</select><select id="selD" aria-label="Tag">${ds.map(d=>`<option value="${d}"${d==sel.d?' selected':''}>Tag ${d}${isDone(sel.w,d)?' ✓':''}</option>`).join('')}</select></div>`;
   if(isDone(sel.w,sel.d))h+=`<p class="done">Dieser Tag ist bereits geloggt. Du kannst ihn erneut speichern.</p>`;
   rows.forEach((r,n)=>{
-    const lg=last(r.ex);
-    let hint='';
-    if(lg)hint=` Zuletzt: ${lg.sets.map(s=>s.res!==undefined?s.res:(s.kg+' kg × '+s.reps)).join(', ')}`;
+    const wod=isWod(r.block),lg=wod?last(r.ex):null,tgt=tgtOf(r);
     h+=`<div class="card" data-ex="${n}"><h3>${esc(r.ex)}<span class="blk">${esc(r.block)}</span></h3>`;
-    if(!isWod(r.block)||r.reps||r.kg)h+=`<div class="mute">Ziel: ${r.sets} × ${esc(r.reps||'?')}${r.kg?' @ '+esc(r.kg)+' kg':''}</div>`;
+    if(tgt)h+=`<div class="mute">${esc(tgt)}</div>`;
     if(r.note)h+=`<div class="mute">${esc(r.note)}</div>`;
-    if(hint)h+=`<div class="mute">${esc(hint)}</div>`;
-    if(isWod(r.block)&&!r.reps&&!r.kg){
-      h+=`<div class="set" style="grid-template-columns:1fr"><input data-res placeholder="Ergebnis (Zeit, Runden, Notizen)" aria-label="Ergebnis"></div>`;
-    }else{
-      for(let s=0;s<r.sets;s++)h+=`<div class="set"><input type="checkbox" data-ok aria-label="Satz ${s+1} erledigt"><input data-kg inputmode="decimal" placeholder="kg" value="${esc(r.kg)}" aria-label="Gewicht Satz ${s+1}"><input data-reps inputmode="numeric" placeholder="Wdh." value="${esc(/^\d+$/.test(r.reps)?r.reps:'')}" aria-label="Wiederholungen Satz ${s+1}"><span class="mute">${s+1}</span></div>`;
-    }
+    if(lg)h+=`<div class="mute">Letztes Mal: ${esc(resOf(lg))}</div>`;
+    h+=wod?`<input data-res placeholder="Ergebnis (Zeit, Runden + Wdh.)" aria-label="Ergebnis" style="margin-top:8px">`:`<label class="ok"><input type="checkbox" data-ok> Erledigt</label>`;
     h+=`</div>`;
   });
+  h+=`<div class="card"><h3>Wie war die Einheit?</h3><select id="rating" aria-label="Bewertung"><option value="">Keine Angabe</option><option>zu leicht</option><option>passend</option><option>zu schwer</option></select><input id="snote" placeholder="Notiz (optional)" style="margin-top:8px"></div>`;
   return h+`<button id="saveSession" style="width:100%">Einheit speichern</button>`;
 }
 function saveSession(){
   const rows=S.plan.filter(r=>r.w==sel.w&&r.d==sel.d);
   const entries=[...document.querySelectorAll('[data-ex]')].map((c,n)=>{
-    const r=rows[n],res=c.querySelector('[data-res]');
-    if(res)return res.value.trim()?{ex:r.ex,block:r.block,sets:[{res:res.value.trim()}]}:null;
-    const sets=[...c.querySelectorAll('.set')].filter(s=>s.querySelector('[data-ok]').checked).map(s=>({kg:s.querySelector('[data-kg]').value,reps:s.querySelector('[data-reps]').value}));
-    return sets.length?{ex:r.ex,block:r.block,sets}:null;
-  }).filter(Boolean);
-  if(!entries.length)return toast('Hake mindestens einen Satz ab oder trage ein Ergebnis ein.');
+    const r=rows[n],res=c.querySelector('[data-res]'),ok=c.querySelector('[data-ok]');
+    const e={ex:r.ex,block:r.block,t:tgtOf(r)};
+    if(res){e.res=res.value.trim();e.done=!!e.res}else e.done=ok.checked;
+    return e;
+  });
+  if(!entries.some(e=>e.done))return toast('Hake mindestens eine Übung ab oder trage ein Ergebnis ein.');
   const d=new Date();
-  S.logs.push({date:new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10),w:sel.w,d:sel.d,entries});
+  S.logs.push({date:new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10),w:sel.w,d:sel.d,rating:$('#rating').value,note:$('#snote').value.trim(),entries});
   save();toast('Einheit gespeichert');render();
 }
 
 function viewHistory(){
   if(!S.logs.length)return `<h1>Verlauf</h1><div class="card mute">Noch nichts geloggt. Speichere eine Einheit unter „Training“.</div>`;
-  return `<h1>Verlauf</h1>`+S.logs.map((l,i)=>({l,i})).reverse().map(({l,i})=>`<div class="card"><div class="row"><h3 style="flex:3">${esc(l.date)} · Woche ${l.w}, Tag ${l.d}</h3><button class="sec small" data-del="${i}">Löschen</button></div>${l.entries.map(e=>`<div><b>${esc(e.ex)}</b><div class="mute">${e.sets.map(s=>s.res!==undefined?esc(s.res):esc(s.kg||'–')+' kg × '+esc(s.reps||'–')).join(' · ')}</div></div>`).join('')}</div>`).join('');
+  return `<h1>Verlauf</h1><button id="sumBtn" style="width:100%;margin-bottom:12px">Zusammenfassung kopieren (für Claude)</button>`+S.logs.map((l,i)=>({l,i})).reverse().map(({l,i})=>`<div class="card"><div class="row"><h3 style="flex:3">${esc(l.date)} · Woche ${l.w}, Tag ${l.d}</h3><button class="sec small" data-del="${i}">Löschen</button></div>${l.rating||l.note?`<div class="mute">${esc([l.rating&&'Bewertung: '+l.rating,l.note].filter(Boolean).join(' · '))}</div>`:''}${l.entries.map(e=>`<div><b>${esc(e.ex)}</b><div class="mute">${esc(fmt(e))}</div></div>`).join('')}</div>`).join('');
 }
 
 function viewPlan(){
   const n=S.plan.length,w=new Set(S.plan.map(r=>r.w)).size;
   return `<h1>Plan</h1><div class="card"><b>${n?`Aktueller Plan: ${n} Zeilen, ${w} Wochen`:'Kein Plan geladen'}</b>
-  <p class="mute">Spalten: woche, tag, block, uebung, saetze, wiederholungen, gewicht_kg, notiz. Komma oder Semikolon als Trenner. Blöcke mit „WOD“ ohne Wiederholungen bekommen ein Ergebnisfeld.</p>
+  <p class="mute">Spalten: woche, tag, block, uebung, saetze, wiederholungen, gewicht_kg, notiz. Komma oder Semikolon als Trenner. Blöcke mit „WOD“ bekommen ein Ergebnisfeld, alle anderen Übungen werden nur abgehakt.</p>
   <input type="file" id="file" accept=".csv,text/csv,text/plain" aria-label="CSV-Datei wählen">
   <p class="mute">oder CSV-Text einfügen:</p><textarea id="csvText" placeholder="woche,tag,block,uebung,..."></textarea>
   <div class="row" style="margin-top:8px"><button id="importCsv">Plan importieren</button><button class="sec" id="tpl">Vorlage laden</button></div>
@@ -158,11 +158,12 @@ document.addEventListener('click',e=>{
   else if(t.id=='saveSession')saveSession();
   else if(g('[data-del]')){if(confirm('Diesen Eintrag löschen?')){S.logs.splice(+g('[data-del]').dataset.del,1);save();render()}}
   else if(t.id=='importCsv'){const v=$('#csvText').value.trim();v?doImport(v):toast('Wähle eine Datei oder füge CSV-Text ein.')}
+  else if(t.id=='sumBtn'){navigator.clipboard.writeText(summary()).then(()=>toast('Kopiert. Füge es im Chat ein.')).catch(()=>toast('Kopieren nicht möglich'))}
   else if(t.id=='tpl')download('plan-vorlage.csv',TEMPLATE,'text/csv');
   else if(g('[data-rm]')){S.gym.items.splice(+g('[data-rm]').dataset.rm,1);save();render()}
   else if(t.id=='addItem'){const v=$('#newItem').value.trim();if(v){S.gym.items.push(v);save();render()}}
   else if(t.id=='exp'){download('home-gym-backup-'+new Date().toISOString().slice(0,10)+'.json',JSON.stringify(S,null,1),'application/json');S.lastBackup=Date.now();save();render()}
-  else if(t.id=='expCsv'){const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';download('verlauf.csv','datum,woche,tag,uebung,satz,kg,wiederholungen,ergebnis\n'+S.logs.flatMap(l=>l.entries.flatMap(e=>e.sets.map((s,i)=>[l.date,l.w,l.d,q(e.ex),i+1,s.kg??'',s.reps??'',q(s.res)].join(',')))).join('\n'),'text/csv')}
+  else if(t.id=='expCsv'){const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';download('verlauf.csv','datum,woche,tag,uebung,erledigt,ergebnis,bewertung,notiz\n'+S.logs.flatMap(l=>l.entries.map(e=>[l.date,l.w,l.d,q(e.ex),e.done===undefined?'':(e.done?1:0),q(resOf(e)),q(l.rating),q(l.note)].join(','))).join('\n'),'text/csv')}
 });
 document.addEventListener('change',e=>{
   const t=e.target;
