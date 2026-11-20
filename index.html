@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#E8590C">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<title>Home Gym Log</title>
+<style>
+:root{--bg:#E7E9E4;--card:#F7F7F4;--ink:#20252A;--mute:#5E676F;--acc:#E8590C;--ok:#2F7D4F;--line:#CBD0CA;box-sizing:border-box}
+@media(prefers-color-scheme:dark){:root{--bg:#16191C;--card:#20252A;--ink:#ECEEEA;--mute:#98A1A8;--acc:#FF7A2E;--ok:#5CB985;--line:#343B41;color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,sans-serif}
+main{max-width:560px;margin:0 auto;padding:16px 14px calc(88px + env(safe-area-inset-bottom,0px));padding-top:calc(16px + env(safe-area-inset-top,0px))}
+h1,h2,h3{font-family:"Roboto Condensed","Arial Narrow",system-ui,sans-serif;font-weight:800;margin:0 0 10px;letter-spacing:.2px}
+h1{font-size:30px}h2{font-size:22px}h3{font-size:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+.mute{color:var(--mute);font-size:14px}
+.row{display:flex;gap:8px;align-items:center}
+.row>*{flex:1}
+select,input,textarea,button{font:inherit;color:inherit}
+select,input,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+textarea{min-height:110px;font:13px/1.4 ui-monospace,monospace}
+button{padding:11px 14px;border:0;border-radius:8px;background:var(--acc);color:#fff;font-weight:700;cursor:pointer}
+button.sec{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button.small{padding:6px 10px;font-size:14px}
+button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.set{display:grid;grid-template-columns:28px 1fr 1fr 40px;gap:6px;align-items:center;margin-top:6px}
+.set input[type=checkbox]{width:26px;height:26px;accent-color:var(--ok)}
+.blk{display:inline-block;font-size:13px;padding:1px 8px;border-radius:99px;background:var(--bg);border:1px solid var(--line);margin-left:6px;font-weight:600}
+.done{color:var(--ok);font-weight:700}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+nav button{flex:1;background:none;color:var(--mute);border-radius:0;padding:14px 4px}
+nav button[aria-current=page]{color:var(--acc);box-shadow:inset 0 3px 0 var(--acc)}
+.chip{display:inline-flex;gap:6px;align-items:center;padding:4px 10px;margin:0 6px 6px 0;border:1px solid var(--line);border-radius:99px;background:var(--bg)}
+.chip b{cursor:pointer;color:var(--mute)}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(76px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:8px;display:none;z-index:9}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<nav id="nav"></nav>
+<div id="toast" role="status"></div>
+<script>
+const K='home-gym-log-v1';
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let S=null;
+try{S=JSON.parse(localStorage.getItem(K))}catch(e){}
+S=S||{plan:[],gym:{items:['Rudergerät','Langhantel','Kurzhanteln','Klimmzugstange','Squat Rack','Hantelbank'],weights:''},logs:[],lastBackup:0};
+let tab='train',sel={w:null,d:null};
+function save(){try{localStorage.setItem(K,JSON.stringify(S))}catch(e){toast('Speichern fehlgeschlagen: Speicher voll oder gesperrt')}}
+function toast(m){const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>t.style.display='none',2600)}
+function download(name,text,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+
+function parseCSV(t){
+  const L=t.replace(/^\uFEFF/,'').split(/\r?\n/).filter(l=>l.trim());
+  if(L.length<2)throw Error('Keine Datenzeilen gefunden.');
+  const sep=(L[0].match(/;/g)||[]).length>(L[0].match(/,/g)||[]).length?';':',';
+  const sp=l=>{const r=[];let c='',q=false;for(const ch of l){if(ch=='"')q=!q;else if(ch==sep&&!q){r.push(c);c=''}else c+=ch}r.push(c);return r.map(x=>x.trim())};
+  const H=sp(L[0]).map(h=>h.toLowerCase());
+  const miss=['woche','tag','uebung'].filter(n=>!H.includes(n));
+  if(miss.length)throw Error('Spalten fehlen: '+miss.join(', '));
+  const rows=L.slice(1).map(l=>{const c=sp(l),o={};H.forEach((h,i)=>o[h]=c[i]||'');
+    return{w:+o.woche,d:+o.tag,block:o.block||'Kraft',ex:o.uebung,sets:Math.max(1,+o.saetze||1),reps:o.wiederholungen,kg:o.gewicht_kg,note:o.notiz}}).filter(r=>r.ex&&r.w&&r.d);
+  if(!rows.length)throw Error('Keine gültigen Zeilen (Woche, Tag und Übung sind Pflicht).');
+  return rows;
+}
+const TEMPLATE='woche,tag,block,uebung,saetze,wiederholungen,gewicht_kg,notiz\n1,1,Kraft,Kniebeuge,5,5,60,Tempo kontrolliert\n1,1,WOD,"12 Min AMRAP: 6 Klimmzüge, 8 Thruster, 200 m Rudern",1,,,Runden + Wiederholungen notieren\n';
+
+const days=()=>{const m={};S.plan.forEach(r=>{(m[r.w]=m[r.w]||new Set()).add(r.d)});return m};
+const isDone=(w,d)=>S.logs.some(l=>l.w==w&&l.d==d);
+function pickDefault(){
+  if(sel.w&&S.plan.some(r=>r.w==sel.w&&r.d==sel.d))return;
+  const ws=[...new Set(S.plan.map(r=>r.w))].sort((a,b)=>a-b);
+  for(const w of ws)for(const d of [...days()[w]].sort((a,b)=>a-b))if(!isDone(w,d)){sel={w,d};return}
+  if(ws.length)sel={w:ws[0],d:[...days()[ws[0]]].sort((a,b)=>a-b)[0]};
+}
+const isWod=b=>/wod|metcon|amrap|emom/i.test(b);
+function last(ex){for(let i=S.logs.length-1;i>=0;i--){const e=S.logs[i].entries.find(e=>e.ex===ex);if(e)return e}return null}
+
+function viewTrain(){
+  if(!S.plan.length)return `<h1>Training</h1><div class="card"><p>Noch kein Plan vorhanden.</p><p class="mute">Importiere unter „Plan“ eine CSV-Datei oder lade die Vorlage.</p><button data-go="plan">Zum Plan-Import</button></div>`;
+  pickDefault();const D=days();
+  const ws=Object.keys(D).map(Number).sort((a,b)=>a-b);
+  const ds=[...D[sel.w]].sort((a,b)=>a-b);
+  const rows=S.plan.map((r,i)=>({...r,i})).filter(r=>r.w==sel.w&&r.d==sel.d);
+  let h=`<h1>Training</h1><div class="row card"><select id="selW" aria-label="Woche">${ws.map(w=>`<option value="${w}"${w==sel.w?' selected':''}>Woche ${w}</option>`).join('')}</select><select id="selD" aria-label="Tag">${ds.map(d=>`<option value="${d}"${d==sel.d?' selected':''}>Tag ${d}${isDone(sel.w,d)?' ✓':''}</option>`).join('')}</select></div>`;
+  if(isDone(sel.w,sel.d))h+=`<p class="done">Dieser Tag ist bereits geloggt. Du kannst ihn erneut speichern.</p>`;
+  rows.forEach((r,n)=>{
+    const lg=last(r.ex);
+    let hint='';
+    if(lg)hint=` Zuletzt: ${lg.sets.map(s=>s.res!==undefined?s.res:(s.kg+' kg × '+s.reps)).join(', ')}`;
+    h+=`<div class="card" data-ex="${n}"><h3>${esc(r.ex)}<span class="blk">${esc(r.block)}</span></h3>`;
+    if(!isWod(r.block)||r.reps||r.kg)h+=`<div class="mute">Ziel: ${r.sets} × ${esc(r.reps||'?')}${r.kg?' @ '+esc(r.kg)+' kg':''}</div>`;
+    if(r.note)h+=`<div class="mute">${esc(r.note)}</div>`;
+    if(hint)h+=`<div class="mute">${esc(hint)}</div>`;
+    if(isWod(r.block)&&!r.reps&&!r.kg){
+      h+=`<div class="set" style="grid-template-columns:1fr"><input data-res placeholder="Ergebnis (Zeit, Runden, Notizen)" aria-label="Ergebnis"></div>`;
+    }else{
+      for(let s=0;s<r.sets;s++)h+=`<div class="set"><input type="checkbox" data-ok aria-label="Satz ${s+1} erledigt"><input data-kg inputmode="decimal" placeholder="kg" value="${esc(r.kg)}" aria-label="Gewicht Satz ${s+1}"><input data-reps inputmode="numeric" placeholder="Wdh." value="${esc(/^\d+$/.test(r.reps)?r.reps:'')}" aria-label="Wiederholungen Satz ${s+1}"><span class="mute">${s+1}</span></div>`;
+    }
+    h+=`</div>`;
+  });
+  return h+`<button id="saveSession" style="width:100%">Einheit speichern</button>`;
+}
+function saveSession(){
+  const rows=S.plan.filter(r=>r.w==sel.w&&r.d==sel.d);
+  const entries=[...document.querySelectorAll('[data-ex]')].map((c,n)=>{
+    const r=rows[n],res=c.querySelector('[data-res]');
+    if(res)return res.value.trim()?{ex:r.ex,block:r.block,sets:[{res:res.value.trim()}]}:null;
+    const sets=[...c.querySelectorAll('.set')].filter(s=>s.querySelector('[data-ok]').checked).map(s=>({kg:s.querySelector('[data-kg]').value,reps:s.querySelector('[data-reps]').value}));
+    return sets.length?{ex:r.ex,block:r.block,sets}:null;
+  }).filter(Boolean);
+  if(!entries.length)return toast('Hake mindestens einen Satz ab oder trage ein Ergebnis ein.');
+  const d=new Date();
+  S.logs.push({date:new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10),w:sel.w,d:sel.d,entries});
+  save();toast('Einheit gespeichert');render();
+}
+
+function viewHistory(){
+  if(!S.logs.length)return `<h1>Verlauf</h1><div class="card mute">Noch nichts geloggt. Speichere eine Einheit unter „Training“.</div>`;
+  return `<h1>Verlauf</h1>`+S.logs.map((l,i)=>({l,i})).reverse().map(({l,i})=>`<div class="card"><div class="row"><h3 style="flex:3">${esc(l.date)} · Woche ${l.w}, Tag ${l.d}</h3><button class="sec small" data-del="${i}">Löschen</button></div>${l.entries.map(e=>`<div><b>${esc(e.ex)}</b><div class="mute">${e.sets.map(s=>s.res!==undefined?esc(s.res):esc(s.kg||'–')+' kg × '+esc(s.reps||'–')).join(' · ')}</div></div>`).join('')}</div>`).join('');
+}
+
+function viewPlan(){
+  const n=S.plan.length,w=new Set(S.plan.map(r=>r.w)).size;
+  return `<h1>Plan</h1><div class="card"><b>${n?`Aktueller Plan: ${n} Zeilen, ${w} Wochen`:'Kein Plan geladen'}</b>
+  <p class="mute">Spalten: woche, tag, block, uebung, saetze, wiederholungen, gewicht_kg, notiz. Komma oder Semikolon als Trenner. Blöcke mit „WOD“ ohne Wiederholungen bekommen ein Ergebnisfeld.</p>
+  <input type="file" id="file" accept=".csv,text/csv,text/plain" aria-label="CSV-Datei wählen">
+  <p class="mute">oder CSV-Text einfügen:</p><textarea id="csvText" placeholder="woche,tag,block,uebung,..."></textarea>
+  <div class="row" style="margin-top:8px"><button id="importCsv">Plan importieren</button><button class="sec" id="tpl">Vorlage laden</button></div>
+  <p class="mute">Beim Import wird der bisherige Plan ersetzt. Dein Verlauf bleibt erhalten.</p></div>`;
+}
+function doImport(t){try{S.plan=parseCSV(t);sel={w:null,d:null};save();toast('Plan importiert: '+S.plan.length+' Zeilen');tab='train';render()}catch(e){toast(e.message)}}
+
+function viewGym(){
+  const age=S.lastBackup?Math.floor((Date.now()-S.lastBackup)/864e5):null;
+  return `<h1>Gym</h1><div class="card"><h3>Equipment</h3><div>${S.gym.items.map((x,i)=>`<span class="chip">${esc(x)} <b data-rm="${i}" role="button" aria-label="${esc(x)} entfernen">×</b></span>`).join('')||'<span class="mute">Noch leer.</span>'}</div>
+  <div class="row"><input id="newItem" placeholder="Gerät hinzufügen"><button id="addItem" style="flex:0 0 auto">Hinzufügen</button></div>
+  <p class="mute" style="margin-bottom:4px">Verfügbare Gewichte, z. B. Hantelscheiben und Kurzhantel-Stufen:</p><input id="weights" value="${esc(S.gym.weights)}" placeholder="z. B. Scheiben 1,25 / 2,5 / 5 / 10 kg; KH 10, 14, 20 kg"></div>
+  <div class="card"><h3>Backup</h3>
+  <p class="mute">${age===null?'Noch kein Backup erstellt.':'Letztes Backup vor '+age+' Tag(en).'}${age===null||age>=7?' <b style="color:var(--acc)">Bitte sichern.</b>':''}</p>
+  <div class="row"><button id="exp">Backup (JSON)</button><button class="sec" id="expCsv">Verlauf (CSV)</button></div>
+  <p class="mute" style="margin-bottom:4px">Backup wiederherstellen:</p><input type="file" id="imp" accept=".json,application/json"></div>`;
+}
+
+const TABS=[['train','Training'],['hist','Verlauf'],['plan','Plan'],['gym','Gym']];
+function render(){
+  $('#app').innerHTML={train:viewTrain,hist:viewHistory,plan:viewPlan,gym:viewGym}[tab]();
+  $('#nav').innerHTML=TABS.map(([k,v])=>`<button data-tab="${k}"${k==tab?' aria-current="page"':''}>${v}</button>`).join('');
+}
+document.addEventListener('click',e=>{
+  const t=e.target,g=id=>t.closest(id);
+  if(g('[data-tab]')){tab=g('[data-tab]').dataset.tab;render();window.scrollTo(0,0)}
+  else if(g('[data-go]')){tab=g('[data-go]').dataset.go;render()}
+  else if(t.id=='saveSession')saveSession();
+  else if(g('[data-del]')){if(confirm('Diesen Eintrag löschen?')){S.logs.splice(+g('[data-del]').dataset.del,1);save();render()}}
+  else if(t.id=='importCsv'){const v=$('#csvText').value.trim();v?doImport(v):toast('Wähle eine Datei oder füge CSV-Text ein.')}
+  else if(t.id=='tpl')download('plan-vorlage.csv',TEMPLATE,'text/csv');
+  else if(g('[data-rm]')){S.gym.items.splice(+g('[data-rm]').dataset.rm,1);save();render()}
+  else if(t.id=='addItem'){const v=$('#newItem').value.trim();if(v){S.gym.items.push(v);save();render()}}
+  else if(t.id=='exp'){download('home-gym-backup-'+new Date().toISOString().slice(0,10)+'.json',JSON.stringify(S,null,1),'application/json');S.lastBackup=Date.now();save();render()}
+  else if(t.id=='expCsv'){const q=v=>'"'+String(v??'').replace(/"/g,'""')+'"';download('verlauf.csv','datum,woche,tag,uebung,satz,kg,wiederholungen,ergebnis\n'+S.logs.flatMap(l=>l.entries.flatMap(e=>e.sets.map((s,i)=>[l.date,l.w,l.d,q(e.ex),i+1,s.kg??'',s.reps??'',q(s.res)].join(',')))).join('\n'),'text/csv')}
+});
+document.addEventListener('change',e=>{
+  const t=e.target;
+  if(t.id=='selW'){sel={w:+t.value,d:[...days()[+t.value]].sort((a,b)=>a-b)[0]};render()}
+  else if(t.id=='selD'){sel.d=+t.value;render()}
+  else if(t.id=='weights'){S.gym.weights=t.value;save()}
+  else if(t.id=='file'&&t.files[0]){t.files[0].text().then(doImport)}
+  else if(t.id=='imp'&&t.files[0]){t.files[0].text().then(x=>{try{const d=JSON.parse(x);if(!Array.isArray(d.plan)||!Array.isArray(d.logs))throw 0;if(confirm('Aktuelle Daten durch das Backup ersetzen?')){S=d;save();toast('Backup wiederhergestellt');render()}}catch(_){toast('Ungültige Backup-Datei.')}})}
+});
+document.addEventListener('keydown',e=>{if(e.key=='Enter'&&e.target.id=='newItem')$('#addItem').click()});
+if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+render();
+</script>
+</body>
+</html>
